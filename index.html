@@ -1009,7 +1009,7 @@ function supportFooter(){
 function help(){
   const topics=[
     ["چطور کالا تعریف کنم؟","از «کالا و انبار» وارد «کالا یا خدمت جدید» شو. برای نمونه، چای و قهوه را در دسته‌بندی «نوشیدنی» ثبت کن. مبلغ را به ریال وارد کن و معادل تومان را زیر کادر ببین."],
-    ["چطور اولین فروش را ثبت کنم؟","«ثبت فروش» را بزن، یک کالا انتخاب کن و تعداد را وارد کن. روش تسویه را انتخاب کن. برای فروش نسیه، «نسیه» و سپس طرف حساب را انتخاب کن. اگر موجودی کافی نباشد، می‌توانی پس از دیدن هشدار، ثبت با موجودی منفی را تأیید کنی."],
+    ["چطور اولین فروش را ثبت کنم؟","«ثبت فروش» را بزن، یک کالا انتخاب کن و تعداد را وارد کن. روش تسویه را انتخاب کن. برای فروش نسیه، «نسیه» و سپس طرف حساب را انتخاب کن. اگر موجودی کافی نباشد، کسری را تأیید کن و ردیف‌های بعدی را اضافه کن. در پایان «ذخیره» را بزن."],
     ["تاریخ و PDF چطور کار می‌کنند؟","تاریخ را به صورت شمسی، مثل ۱۴۰۵/۰۳/۰۲ وارد کن. از جزئیات فاکتور یا بخش گزارش‌ها «دانلود PDF» را بزن تا فایل در دانلودهای مرورگر ذخیره شود."],
     ["چطور با عکس جست‌وجو کنم؟","به هر کالا عکس بده. در «جستجو در فروشگاه من» دکمهٔ «جستجو با عکس» را بزن. نتیجه براساس شباهت عکس به عکس کالاهای ثبت‌شده مرتب می‌شود."],
     ["چطور نسخهٔ پشتیبان بگیرم؟","از تنظیمات «دانلود پشتیبان» را بزن و فایل JSON را نگه دار. برای انتقال داده‌ها به مرورگر دیگر، آن فایل را با گزینهٔ «بازیابی پشتیبان» وارد کن."]
@@ -1063,7 +1063,7 @@ function modalForm(title,inner,save){
     if(submit.disabled)return;
     submit.disabled=true;
     try{
-      if(await save(readForm(form),form,e.submitter)===false||!form.isConnected||!el.dialog.open)return;
+      if(await save(readForm(form),form)===false||!form.isConnected||!el.dialog.open)return;
       el.dialog.close();
       render();
     }catch(error){notifyError(error)}
@@ -1178,7 +1178,8 @@ function docForm(current,kind,copy=false){
   const warehouse=d.warehouse??state.warehouses[0].id;
   const box=d.box??state.cashboxes[0].id;
   const paymentMode=d.id?(d.paid===0&&total(d)>0?"credit":d.paid>=total(d)?"full":"partial"):(d.kind==="sale"?"full":"partial");
-  let acceptedShortages="";
+  const approvedShortages=new Map();
+  const shortageKey=({product,warehouse})=>JSON.stringify([warehouse,product]);
   const f=modalForm(d.id?"ویرایش فاکتور":quickSale?"ثبت فروش":"ثبت سند جدید",
     '<div class="row invoice-actions">'+button("اسکن بارکد",{action:"scan",value:"invoice",symbol:"scan",cls:"btn primary"})+
     button("افزودن ردیف",{action:"line-add",symbol:"plus"})+button("بارکد دستی",{action:"invoice-manual",cls:"btn"})+'</div>'+
@@ -1196,7 +1197,7 @@ function docForm(current,kind,copy=false){
       field("توضیحات","note",d.note,{type:"textarea",wide:true}),
       field("تصویر پیوست","image","",{type:"file",wide:true})
     )+customFields(d)+'</details>'+
-    '<p class="notice form-notice" id="docTotal"></p><section class="notice form-notice stock-warning" id="stockWarning" hidden></section>',async (data,form,submitter)=>{
+    '<p class="notice form-notice" id="docTotal"></p><section class="notice form-notice stock-warning" id="stockWarning" hidden></section>',async (data,form)=>{
     const v=Object.fromEntries(data);
     const lines=data.getAll("product").map((product,i)=>{
       const p=get("products",product);
@@ -1224,17 +1225,23 @@ function docForm(current,kind,copy=false){
     const shortages=docStockShortages(record,d.id,original&&!copy?original:null);
     if(shortages.length){
       if(record.kind!=="sale"||record.status!=="posted")throw new Error("موجودی «"+shortages[0].name+"» برای این تغییر کافی نیست.");
-      const signature=JSON.stringify(shortages);
-      const confirmed=submitter?.dataset.confirmStock==="yes";
-      if(!confirmed||acceptedShortages!==signature){
-        acceptedShortages=signature;
+      const pending=shortages.filter(item=>item.after<(approvedShortages.get(shortageKey(item))??0)-.000001);
+      if(pending.length){
         const warning=$("#stockWarning",form);
         $(".error",form).textContent="";
         warning.hidden=false;
-        warning.innerHTML='<strong>فاکتور با موجودی منفی ثبت شود؟</strong><ul>'+shortages.map(item=>
+        warning.innerHTML='<strong>کسری موجودی این کالاها را تأیید می‌کنید؟</strong><ul>'+pending.map(item=>
           '<li>'+esc(item.name)+' · موجودی بعد از ثبت: '+money(item.after)+'</li>'
-        ).join("")+'</ul><button type="submit" class="btn primary" data-confirm-stock="yes">ثبت با موجودی منفی</button>';
-        $("button",warning).focus();
+        ).join("")+'</ul><p>بعد از تأیید می‌توانید ردیف‌های بعدی را اضافه کنید.</p>'+
+          button("تأیید کسری و ادامه",{cls:"btn primary"});
+        const confirm=$("button",warning);
+        confirm.addEventListener("click",()=>{
+          for(const item of pending)approvedShortages.set(shortageKey(item),item.after);
+          clearStockWarning(form);
+          $('[data-action="line-add"]',form).focus();
+          toast("کسری تأیید شد. برای ثبت فاکتور، در پایان «ذخیره» را بزنید.");
+        },{once:true});
+        confirm.focus();
         return false;
       }
     }
